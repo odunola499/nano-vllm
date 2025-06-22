@@ -117,6 +117,7 @@ class ModelRunner:
     def prepare_prefill(self, seqs: list[Sequence]):
         input_ids = []
         positions = []
+        embeds = []
         cu_seqlens_q = [0]
         cu_seqlens_k = [0]
         max_seqlen_q = 0
@@ -125,7 +126,8 @@ class ModelRunner:
         block_tables = None
         for seq in seqs:
             seqlen = len(seq)
-            input_ids.extend(seq[seq.num_cached_tokens:])
+            tokens = seq[seq.num_cached_tokens:]
+            input_ids.extend(tokens)
             positions.extend(list(range(seq.num_cached_tokens, seqlen)))
             seqlen_q = seqlen - seq.num_cached_tokens
             seqlen_k = seqlen
@@ -140,6 +142,20 @@ class ModelRunner:
                 else:
                     end = start + seq.last_block_num_tokens 
                 slot_mapping.extend(list(range(start, end)))
+
+            if seq.prompt_embeds is not None and seq.num_cached_tokens == 0:
+                prefix_len = seq.num_prompt_embeds
+                text_ids = tokens[prefix_len:]
+                if text_ids:
+                    text_ids = torch.tensor(text_ids, dtype=torch.int64, device="cuda", pin_memory=True).cuda(non_blocking=True)
+                    text_embeds = self.model.model.embed_tokens(text_ids)
+                    seq_embeds = torch.cat([seq.prompt_embeds.to("cuda"), text_embeds], dim=0)
+                else:
+                    seq_embeds = seq.prompt_embeds.to("cuda")
+            else:
+                ids = torch.tensor(tokens, dtype=torch.int64, device="cuda", pin_memory=True).cuda(non_blocking=True)
+                seq_embeds = self.model.model.embed_tokens(ids)
+            embeds.append(seq_embeds)
         assert len(input_ids) == len(slot_mapping)
         if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache
             block_tables = self.prepare_block_tables(seqs)
@@ -149,7 +165,8 @@ class ModelRunner:
         cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, None, block_tables)
-        return input_ids, positions
+        inputs_embeds = torch.cat(embeds, dim=0) if embeds else None
+        return input_ids, positions, inputs_embeds
 
     def prepare_decode(self, seqs: list[Sequence]):
         input_ids = []
@@ -177,7 +194,9 @@ class ModelRunner:
         return temperatures
 
     @torch.inference_mode()
-    def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill):
+    def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill, inputs_embeds=None):
+        if inputs_embeds is not None:
+            return self.model.compute_logits(self.model(input_ids, positions, inputs_embeds=inputs_embeds))
         if is_prefill or self.enforce_eager or input_ids.size(0) > 512:
             return self.model.compute_logits(self.model(input_ids, positions))
         else:
@@ -197,9 +216,13 @@ class ModelRunner:
             return self.model.compute_logits(graph_vars["outputs"][:bs])
 
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
-        input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
+        if is_prefill:
+            input_ids, positions, inputs_embeds = self.prepare_prefill(seqs)
+        else:
+            input_ids, positions = self.prepare_decode(seqs)
+            inputs_embeds = None
         temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
-        logits = self.run_model(input_ids, positions, is_prefill)
+        logits = self.run_model(input_ids, positions, is_prefill, inputs_embeds=inputs_embeds)
         token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
         reset_context()
         return token_ids

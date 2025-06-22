@@ -15,8 +15,14 @@ class Sequence:
     block_size = 256
     counter = count()
 
-    def __init__(self, token_ids: list[int], sampling_params: SamplingParams):
-        self.seq_id = next(Sequence.counter)
+    def __init__(
+        self,
+        token_ids: list[int],
+        sampling_params: SamplingParams,
+        prompt_embeds=None,
+        seq_id: int | None = None,
+    ):
+        self.seq_id = seq_id if seq_id is not None else next(Sequence.counter)
         self.status = SequenceStatus.WAITING
         self.token_ids = copy(token_ids)
         self.last_token = token_ids[-1]
@@ -27,6 +33,8 @@ class Sequence:
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
+        self.prompt_embeds = prompt_embeds
+        self.num_prompt_embeds = 0 if prompt_embeds is None else len(prompt_embeds)
 
     def __len__(self):
         return self.num_tokens
