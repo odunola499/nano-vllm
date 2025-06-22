@@ -39,10 +39,25 @@ class LLMEngine:
         for p in self.ps:
             p.join()
 
-    def add_request(self, prompt: str | list[int], sampling_params: SamplingParams):
+    def add_request(
+        self,
+        prompt: str | list[int],
+        sampling_params: SamplingParams,
+        prompt_embeds=None,
+    ):
         if isinstance(prompt, str):
-            prompt = self.tokenizer.encode(prompt)
-        seq = Sequence(prompt, sampling_params)
+            prompt_ids = self.tokenizer.encode(prompt)
+        else:
+            prompt_ids = prompt
+        if prompt_embeds is not None:
+            pad_id = self.tokenizer.pad_token_id or self.tokenizer.eos_token_id
+            seq_id = next(Sequence.counter)
+            dummy_ids = [-(seq_id + 1) * 1000000 - i for i in range(len(prompt_embeds))]
+            token_ids = dummy_ids + list(prompt_ids)
+        else:
+            seq_id = next(Sequence.counter)
+            token_ids = list(prompt_ids)
+        seq = Sequence(token_ids, sampling_params, prompt_embeds=prompt_embeds, seq_id=seq_id)
         self.scheduler.add(seq)
 
     def step(self):
@@ -60,14 +75,17 @@ class LLMEngine:
         self,
         prompts: list[str] | list[list[int]],
         sampling_params: SamplingParams | list[SamplingParams],
+        prompt_embeds: list | None = None,
         use_tqdm: bool = True,
     ) -> list[str]:
         if use_tqdm:
             pbar = tqdm(total=len(prompts), desc="Generating", dynamic_ncols=True)
         if not isinstance(sampling_params, list):
             sampling_params = [sampling_params] * len(prompts)
-        for prompt, sp in zip(prompts, sampling_params):
-            self.add_request(prompt, sp)
+        if prompt_embeds is None:
+            prompt_embeds = [None] * len(prompts)
+        for prompt, sp, emb in zip(prompts, sampling_params, prompt_embeds):
+            self.add_request(prompt, sp, prompt_embeds=emb)
         outputs = {}
         prefill_throughput = decode_throughput = 0.
         while not self.is_finished():
