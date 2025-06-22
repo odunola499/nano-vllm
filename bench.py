@@ -1,6 +1,9 @@
 import os
 import time
 from random import randint, seed
+
+import torch
+
 from nanovllm import LLM, SamplingParams
 # from vllm import LLM, SamplingParams
 
@@ -14,6 +17,9 @@ def main():
     path = os.path.expanduser("~/huggingface/Qwen3-0.6B/")
     llm = LLM(path, enforce_eager=False, max_model_len=4096)
 
+    embed_dim = llm.model_runner.model.model.embed_tokens.weight.size(1)
+    audio_embeds = [torch.randn(750, embed_dim) for _ in range(num_seqs)]
+
     prompt_token_ids = [[randint(0, 10000) for _ in range(randint(100, max_input_len))] for _ in range(num_seqs)]
     sampling_params = [SamplingParams(temperature=0.6, ignore_eos=True, max_tokens=randint(100, max_ouput_len)) for _ in range(num_seqs)]
     # uncomment the following line for vllm
@@ -21,7 +27,7 @@ def main():
 
     llm.generate(["Benchmark: "], SamplingParams())
     t = time.time()
-    llm.generate(prompt_token_ids, sampling_params, use_tqdm=False)
+    llm.generate(prompt_token_ids, sampling_params, prompt_embeds=audio_embeds, use_tqdm=False)
     t = (time.time() - t)
     total_tokens = sum(sp.max_tokens for sp in sampling_params)
     throughput = total_tokens / t
