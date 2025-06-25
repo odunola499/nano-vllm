@@ -176,7 +176,7 @@ class Qwen3Model(nn.Module):
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if inputs_embeds is not None:
-            hidden_states = inputs_embeds
+            hidden_states = inputs_embeds.to(torch.bfloat16)
         else:
             hidden_states = self.embed_tokens(input_ids)
         residual = None
