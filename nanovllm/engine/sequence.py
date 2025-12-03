@@ -1,6 +1,8 @@
 from copy import copy
 from enum import Enum, auto
 from itertools import count
+from trio.abc import SendChannel, ReceiveChannel
+from trio import Event
 
 from nanovllm.sampling_params import SamplingParams
 
@@ -27,6 +29,7 @@ class Sequence:
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
+        self.send_channel: None | SendChannel = None
 
     def __len__(self):
         return self.num_tokens
