@@ -38,19 +38,8 @@ class AsyncLLMEngine:
 
         self.send_request_channel, self.receive_request_channel = trio.open_memory_channel(1000)
         self._batch_loop_started = False
-        self._nursery_manager = None
-        self._nursery = None
+        self._shutdown_event = trio.Event()
 
-    async def start_background_loop(self):
-        self._nursery_manager = trio.open_nursery()
-        self._nursery = await self._nursery_manager.__aenter__()
-        self._nursery.start_soon(self.background_loop)
-
-    async def stop_background_loop(self):
-        if self._nursery_manager is not None:
-            await self._nursery_manager.__aexit__(None, None, None)
-            self._nursery_manager = None
-            self._nursery = None
 
 
     def exit(self):
@@ -84,6 +73,8 @@ class AsyncLLMEngine:
             self
     ):
         while True:
+            if self._shutdown_event.is_set():
+                break
             try:
                 while True:
                     seq = self.receive_request_channel.receive_nowait()
@@ -97,8 +88,9 @@ class AsyncLLMEngine:
                     output_text = self.tokenizer.decode(completion_token_ids)
                     await send_output_channel.send((seq_id, completion_token_ids, output_text))
             else:
-                seq = await self.receive_request_channel.receive()
-                self.scheduler.add(seq)
+                with trio.move_on_after(0.1):
+                    seq = await self.receive_request_channel.receive()
+                    self.scheduler.add(seq)
 
 
     async def generate(
@@ -106,18 +98,15 @@ class AsyncLLMEngine:
         prompt: str | list[int],
         sampling_params: SamplingParams,
     ):
-        if not self._batch_loop_started:
-            await self.start_background_loop()
-            self._batch_loop_started = True
-
-
         output_channel = await self.add_request(
             prompt,sampling_params
         )
-
         seq_id, completion_token_ids, output_text = await output_channel.receive()
         outputs = {'text':output_text, 'token_ids':completion_token_ids}
         return outputs
+
+    async def shutdown(self):
+        self._shutdown_event.set()
 
 
 
