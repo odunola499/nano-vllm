@@ -39,7 +39,7 @@ async def main():
             nursery.start_soon(run_single_request, llm, prompt, idx)
             await trio.sleep(delay)
 
-    print("\nAll requests finished.")
+    print("Done")
 
 
 if __name__ == "__main__":
